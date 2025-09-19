@@ -1,0 +1,67 @@
+🛠️ Playbook de Digitalização e Enumeração (Laboratório)
+1️⃣ Descoberta de Hosts
+# Descoberta rápida de hosts vivos em uma rede
+fping -a -g IP/24 2>/dev/null
+
+# Descoberta com Nmap (ICMP + ARP)
+nmap -sn IP/24
+
+2️⃣ Varredura de Portas
+# Scan rápido de todas as portas com masscan
+masscan IP -p1-65535 --rate 1000
+
+# Scan detalhado com Nmap das portas encontradas
+nmap -sV -sC -p22,80,139,445,3389 IP
+
+3️⃣ Enumeração de Serviços
+🔗 SMB (Windows Shares)
+# Listar compartilhamentos abertos
+smbclient -L //IP -N
+
+# Conectar em um share sem senha
+smbclient //IP/share -N
+
+# Mapear permissões e usuários
+enum4linux -a IP
+
+# Enumerar SMB com crackmapexec
+crackmapexec smb IP
+
+🌐 Web
+# Descobrir diretórios
+gobuster dir -u http://IP/ -w /usr/share/wordlists/dirb/common.txt
+
+# Descobrir subdomínios (para domínios)
+subfinder -d exemplo.local
+
+# Capturar banners de servidores
+whatweb http://IP/
+
+
+🔑 SSH / Credenciais
+# Teste de força bruta em SSH (apenas em lab!)
+hydra -l root -P /usr/share/wordlists/rockyou.txt ssh://IP
+
+📜 SNMP
+# Enumeração SNMP v2c com comunidade pública
+snmpwalk -v2c -c public IP
+
+4️⃣ Coleta de Vulnerabilidades
+# Varredura de vulnerabilidades com Nmap scripts
+nmap --script vuln -p22,80,445 IP
+
+# Scanning web com Nikto
+nikto -h http://IP
+
+5️⃣ Enumeração de Active Directory (se houver domínio)
+# Descobrir usuários via Kerberos (ASREPRoasting)
+impacket-GetNPUsers exemplo.local/ -dc-ip IP -no-pass
+
+# BloodHound (coletor de dados)
+bloodhound-python -c All -ip IP -u usuario -p senha -d exemplo.local
+
+
+7️⃣ Automatização (Recon All-in-One)
+# Exemplo com autorecon (framework de recon)
+autorecon IP
+
