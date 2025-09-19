@@ -1,0 +1,54 @@
+RECONHECIMENTO
+
+```
+Procurar empresas que aceitam Bug Bounty:
+
+	https://www.bugcrowd.com/
+	
+	Procurar email de uma empresa: 
+
+	https://hunter.io
+	https://phonebook.cz/
+	https://www.voilanorbert.com/
+	https://tools.emailhippo.com/
+	https://email-checker.net/validate
+	https://chrome.google.com/webstore/detail/clearbit-connectsupercha/pmnhcgfcafcnkbengdcanjablaabjplo?hl=pt-BR&
+
+----------------------------------------------------------------------------------------
+
+Procurar senhas violadas com o script BREACH-PARSE:
+
+	https://github.com/hmaverickadams/breach-parse
+
+----------------------------------------------------------------------------------------
+
+Caçando credenciais violadas com o DeHashed :
+
+	https://www.dehashed.com/
+
+----------------------------------------------------------------------------------------
+
+Caçando subdominios: 
+
+	Procurar subdominios com dev, api ou SS
+	https://crt.sh/
+
+	Sublist3r:
+		Sublist3r -d dominio.com
+		
+	Amass:
+		https://github.com/OWASP/Amass/blob/master/doc/install.md
+
+----------------------------------------------------------------------------------------
+
+Procurando Tecnologias em Sites:
+
+	wappalyzer - extenção firefox
+
+		https://builtwith.com/
+
+	ferramenta - whatweb https://nomedosite.com
+
+	Burpsuite - pesquisando por diretórios API e SS
+
+```
