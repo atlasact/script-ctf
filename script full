@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# full_enum.sh
+# Recon & enumeration automation for CTFs / pentest reconnaissance.
+# WARNING: Use only on systems you are authorized to test.
+# Usage: sudo ./full_enum.sh <TARGET_IP_OR_DOMAIN> [OUTPUT_DIR]
+# Example: sudo ./full_enum.sh 10.10.10.10 recon_output
+
+set -euo pipefail
+IFS=$'\n\t'
+
+TARGET="${1:-}"
+OUTDIR="${2:-recon_$(date +%Y%m%d_%H%M%S)}"
+WORDLISTS_DIRS=(/usr/share/wordlists /usr/share/seclists /usr/share/wordlists/dirb)
+COMMON_WORDLIST="/usr/share/wordlists/dirb/common.txt"
+BIG_WORDLIST="/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt"
+ROCKYOU="/usr/share/wordlists/rockyou.txt"
+
+if [[ -z "$TARGET" ]]; then
+  echo "Usage: sudo $0 <TARGET_IP_OR_DOMAIN> [OUTPUT_DIR]"
+  exit 1
+fi
+
+mkdir -p "$OUTDIR"
+echo "[*] Output directory: $OUTDIR"
+
+# Tools to check
+REQUIRED_TOOLS=(nmap masscan whatweb nikto gobuster ffuf dirsearch sslscan sslyze enum4linux smbmap curl jq binwalk zip2john john sqlmap)
+
+check_tools(){
+  echo "[*] Checking tools..."
+  MISSING=()
+  for t in "${REQUIRED_TOOLS[@]}"; do
+    if ! command -v "$t" >/dev/null 2>&1; then
+      MISSING+=("$t")
+    fi
+  done
+  if (( ${#MISSING[@]} )); then
+    echo "[!] Missing tools: ${MISSING[*]}"
+    echo "Install missing tools (examples):"
+    echo " apt update && apt install -y nmap masscan whatweb nikto gobuster ffuf dirsearch sslscan enum4linux smbmap curl jq binwalk john sqlmap"
+    echo "Note: some tools may be in separate packages or pip installs (sslyze, dirsearch). Continuing but skips missing tools."
+    sleep 2
+  else
+    echo "[*] All required tools present (or optional)."
+  fi
+}
+
+# Helpers
+run_bg(){
+  local cmd="$1"; local outfile="$2"
+  echo "[+] Running: $cmd"
+  bash -c "$cmd" >"$outfile" 2>&1 & disown
+}
+
+safe_run(){
+  local cmd="$1"; local outfile="$2"
+  echo "[+] Running: $cmd"
+  bash -c "$cmd" >"$outfile" 2>&1 || echo "[!] Command failed: $cmd (see $outfile)"
+}
+
+# Create subdirs
+mkdir -p "$OUTDIR"/nmap
+mkdir -p "$OUTDIR"/http
+mkdir -p "$OUTDIR"/smb
+mkdir -p "$OUTDIR"/ftp
+mkdir -p "$OUTDIR"/misc
+
+check_tools
+
+echo
+echo "========================"
+echo "1) Quick TCP ports (nmap top1000 + service/version + scripts)"
+echo "========================"
+safe_run "nmap -sC -sV -p- --min-rate 500 -oA \"$OUTDIR/nmap/nmap_full_$(date +%s)\" $TARGET" "$OUTDIR/nmap/nmap_full.out"
+
+echo
+echo "========================"
+echo "2) Fast SYN scan with masscan (optional) to find open ports quickly"
+echo "========================"
+if command -v masscan >/dev/null 2>&1; then
+  echo "[*] Running masscan (requires root and raw sockets). Output: $OUTDIR/nmap/masscan.out"
+  safe_run "masscan $TARGET -p1-65535 --rate=1000 -oL \"$OUTDIR/nmap/masscan.gnmap\"" "$OUTDIR/nmap/masscan.out" || true
+  echo "[*] Converting masscan to nmap ports list (if any)"
+  MASSCAN_PORTS=$(grep -Po 'Ports: \K.*' "$OUTDIR/nmap/masscan.gnmap" 2>/dev/null || true)
+  if [[ -n "$MASSCAN_PORTS" ]]; then
+    # extract ports to comma list
+    P_LIST=$(grep '^Host:' "$OUTDIR/nmap/masscan.gnmap" | sed -n '1p' | awk -F'Ports: ' '{print $2}' | cut -d'/' -f1 | tr '\n' ',' | sed 's/,$//')
+    if [[ -n "$P_LIST" ]]; then
+      safe_run "nmap -sC -sV -p$P_LIST -oA \"$OUTDIR/nmap/nmap_from_masscan\" $TARGET" "$OUTDIR/nmap/nmap_from_masscan.out"
+    fi
+  fi
+fi
+
+echo
+echo "========================"
+echo "3) HTTP enumeration (whatweb, nikto, robots, dir brute)"
+echo "========================"
+# Detect HTTP ports from nmap output
+HTTP_PORTS=$(grep -E "http|www" "$OUTDIR/nmap/nmap_full.out" -i | grep -Po '([0-9]+)/tcp' | cut -d'/' -f1 | tr '\n' ',' | sed 's/,$//')
+if [[ -z "$HTTP_PORTS" ]]; then HTTP_PORTS="80"; fi
+
+for p in $(echo "$HTTP_PORTS" | tr ',' ' '); do
+  base_url="http://$TARGET:$p"
+  safe_run "whatweb -v --log-verbose=\"$OUTDIR/http/whatweb_port${p}.log\" \"$base_url\"" "$OUTDIR/http/whatweb_port${p}.out"
+  safe_run "curl -sI \"$base_url\" > \"$OUTDIR/http/header_port${p}.txt\"" "$OUTDIR/http/curl_header_port${p}.out"
+  safe_run "nikto -h \"$base_url\" -output \"$OUTDIR/http/nikto_port${p}.txt\"" "$OUTDIR/http/nikto_port${p}.out" || true
+  # robots
+  safe_run "curl -s \"$base_url/robots.txt\" > \"$OUTDIR/http/robots_port${p}.txt\"" "$OUTDIR/http/robots_port${p}.curl"
+  # dir brute: gobuster + ffuf (if available)
+  if command -v gobuster >/dev/null 2>&1; then
+    WL="${COMMON_WORDLIST}"
+    [[ -f "$BIG_WORDLIST" ]] && WL="$BIG_WORDLIST"
+    run_bg "gobuster dir -u \"$base_url\" -w \"$WL\" -t 50 -o \"$OUTDIR/http/gobuster_port${p}.txt\" -q" "$OUTDIR/http/gobuster_port${p}.out"
+  fi
+  if command -v ffuf >/dev/null 2>&1; then
+    FFUF_WORD="${COMMON_WORDLIST}"
+    run_bg "ffuf -u \"$base_url/FUZZ\" -w \"$FFUF_WORD\" -mc 200,301,302,401,403 -fs 0 -o \"$OUTDIR/http/ffuf_port${p}.json\" -of json" "$OUTDIR/http/ffuf_port${p}.out"
+  fi
+  if command -v dirsearch >/dev/null 2>&1; then
+    run_bg "dirsearch -u \"$base_url\" -e php,html,txt,bak,zip -w \"$COMMON_WORDLIST\" -o \"$OUTDIR/http/dirsearch_port${p}.txt\"" "$OUTDIR/http/dirsearch_port${p}.out"
+  fi
+done
+
+echo
+echo "========================"
+echo "4) SSL/TLS checks (if https present)"
+echo "========================"
+HTTPS_PORTS=$(grep -E "https" "$OUTDIR/nmap/nmap_full.out" -i | grep -Po '([0-9]+)/tcp' | cut -d'/' -f1 | tr '\n' ',' | sed 's/,$//')
+if [[ -n "$HTTPS_PORTS" ]]; then
+  for p in $(echo "$HTTPS_PORTS" | tr ',' ' '); do
+    base_url="https://$TARGET:$p"
+    if command -v sslscan >/dev/null 2>&1; then
+      safe_run "sslscan --no-failed \"$TARGET:$p\" > \"$OUTDIR/http/sslscan_port${p}.txt\"" "$OUTDIR/http/sslscan_port${p}.out"
+    elif command -v sslyze >/dev/null 2>&1; then
+      safe_run "sslyze --regular \"$TARGET:$p\" > \"$OUTDIR/http/sslyze_port${p}.txt\"" "$OUTDIR/http/sslyze_port${p}.out"
+    fi
+    safe_run "curl -sI \"$base_url\" > \"$OUTDIR/http/curl_header_https_port${p}.txt\"" "$OUTDIR/http/curl_header_https_port${p}.out"
+  done
+fi
+
+echo
+echo "========================"
+echo "5) FTP / vsftpd / anonymous checks"
+echo "========================"
+if grep -q "21/tcp" "$OUTDIR/nmap/nmap_full.out" 2>/dev/null || nmap -p21 "$TARGET" | grep -q open; then
+  if command -v nmap >/dev/null 2>&1; then
+    safe_run "nmap -p21 --script ftp-anon,ftp-syst,ftp-vsftpd-backdoor -oN \"$OUTDIR/ftp/ftp_nmap.txt\" $TARGET" "$OUTDIR/ftp/ftp_nmap.out"
+  fi
+fi
+
+echo
+echo "========================"
+echo "6) SMB / Windows enumeration (enum4linux, smbmap)"
+echo "========================"
+if grep -E "139/tcp|445/tcp" "$OUTDIR/nmap/nmap_full.out" -i >/dev/null 2>&1 || nmap -p139,445 "$TARGET" | grep -q open; then
+  if command -v enum4linux >/dev/null 2>&1; then
+    safe_run "enum4linux -a $TARGET > \"$OUTDIR/smb/enum4linux_all.txt\"" "$OUTDIR/smb/enum4linux_all.out"
+  fi
+  if command -v smbmap >/dev/null 2>&1; then
+    safe_run "smbmap -H $TARGET > \"$OUTDIR/smb/smbmap.txt\"" "$OUTDIR/smb/smbmap.out" || true
+  fi
+  # try anonymous smbclient
+  safe_run "smbclient -L //$TARGET -N > \"$OUTDIR/smb/smbclient_list.txt\" 2>&1" "$OUTDIR/smb/smbclient_list.out" || true
+fi
+
+echo
+echo "========================"
+echo "7) SNMP (brute public) and other UDP services"
+echo "========================"
+if grep -E "161/udp" "$OUTDIR/nmap/nmap_full.out" -i >/dev/null 2>&1 || nmap -sU -p161 "$TARGET" | grep -q open; then
+  if command -v snmpwalk >/dev/null 2>&1; then
+    safe_run "snmpwalk -v2c -c public $TARGET 1 > \"$OUTDIR/misc/snmp_public.txt\" 2>&1" "$OUTDIR/misc/snmp_public.out" || true
+  fi
+fi
+
+echo
+echo "========================"
+echo "8) Web archive & common files checks (robots already fetched)"
+echo "========================"
+# try wget recursive to download accessible site (non-destructive)
+for p in $(echo "$HTTP_PORTS" | tr ',' ' '); do
+  base_url="http://$TARGET:$p"
+  safe_run "wget --mirror --convert-links --adjust-extension --no-parent --wait=0.5 -e robots=off -P \"$OUTDIR/http/wget_port${p}\" \"$base_url\"" "$OUTDIR/http/wget_port${p}.out" || true
+done
+
+echo
+echo "========================"
+echo "9) Image/file forensic (binwalk) for images found locally"
+echo "========================"
+# scan images in wget folder if present
+if compgen -G "$OUTDIR/http/wget_port*/**/*.*" >/dev/null 2>&1; then
+  for img in $(find "$OUTDIR/http/wget_port*/" -type f -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg'); do
+    safe_run "binwalk -e --run-as=root \"$img\" && echo 'binwalk done for $img'" "$OUTDIR/misc/binwalk_$(basename "$img").out" || true
+  done
+fi
+
+echo
+echo "========================"
+echo "10) SQLi quick probe (non-destructive) - sqlmap ping/test parameters"
+echo "========================"
+# Only probe if URLs with params are present
+if command -v sqlmap >/dev/null 2>&1; then
+  # find URLs with ? in wget folder
+  if compgen -G "$OUTDIR/http/wget_port*/**/*" >/dev/null 2>&1; then
+    PARAM_URLS=$(grep -RhoP "http[s]?://[^\"]+\?[^\"]+" "$OUTDIR/http/wget_port*" 2>/dev/null | sort -u | head -n 10 || true)
+    for u in $PARAM_URLS; do
+      echo "[*] SQLMap quick test: $u"
+      safe_run "sqlmap -u \"$u\" --batch --spider --timeout=10 -o --output-dir=\"$OUTDIR/misc/sqlmap_$(echo $u | md5sum | cut -d' ' -f1)\"" "$OUTDIR/misc/sqlmap_$(date +%s).out" || true
+    done
+  fi
+fi
+
+echo
+echo "========================"
+echo "11) Credentials brute-force templates (DO NOT RUN WITHOUT AUTHORIZATION)"
+echo "========================"
+echo "Hydra templates (commented):"
+cat <<'HYDRA' > "$OUTDIR/misc/hydra_templates.txt"
+# Example FTP brute force:
+# hydra -l chris -P /usr/share/wordlists/rockyou.txt ftp://<TARGET>
+
+# Example SSH brute force:
+# hydra -l chris -P /usr/share/wordlists/rockyou.txt ssh://<TARGET>
+
+# SMB (if allowed) using smb login module:
+# hydra -L users.txt -P passwords.txt smb://<TARGET>
+HYDRA
+
+echo "[*] Hydra templates saved to $OUTDIR/misc/hydra_templates.txt"
+
+echo
+echo "========================"
+echo "12) Local parsing helpers"
+echo "========================"
+# Search for flags-looking patterns in collected files
+safe_run "grep -R -oP \"[A-Za-z0-9]{4}-[A-Za-z0-9]{5}\" \"$OUTDIR\" | sed -n '1,200p' > \"$OUTDIR/misc/possible_flags.txt\"" "$OUTDIR/misc/grep_flags.out" || true
+safe_run "grep -R -iE \"password|passwd|secret|flag|key|admin\" \"$OUTDIR\" | head -n 200 > \"$OUTDIR/misc/interesting_strings.txt\"" "$OUTDIR/misc/interesting.out" || true
+
+echo
+echo "========================"
+echo "Finished launching background tasks (some scans run in background)."
+echo "Check $OUTDIR for output. Long-running tasks: gobuster/ffuf/dirsearch/masscan/sqlmap may still run."
+echo "Important: Review outputs before running any intrusive/exploit actions."
+echo
+echo "[*] Quick next steps:"
+echo " - Inspect $OUTDIR/http for discovered endpoints and robots.txt"
+echo " - Inspect $OUTDIR/nmap for open services and versions"
+echo " - If FTP credentials found, check $OUTDIR/ftp"
+echo " - If SMB shares found, try smbclient/smbmap to download files"
+echo
+echo "Done."
