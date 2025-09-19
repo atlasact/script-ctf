@@ -1,0 +1,68 @@
+```
+Port Scan Nmap
+
+	nmap  -sS  -T4 -p- -A 192.168.0.0
+
+	-sS = Furtivo
+	-T4 Velocidade 1 a 5
+	-p- = Todas as Portas
+	-A = informações adicionais
+
+----------------------------------------------------------------------------------------
+
+Scan de Vulnerabilidades Web
+
+	nikto -h http://192.168.64.129
+
+	-h =  host para escanear
+
+----------------------------------------------------------------------------------------
+
+Ataque de Força Bruta em Diretórios Web
+
+DirBuster:
+
+            Targuet url: http://alvo.com:80/
+
+            °Go Faster
+
+            File with list of dir/file: /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+
+----------------------------------------------------------------------------------------
+achar arquivo de diretorio com a inicial da pessoa
+
+curl -A "LETRA DA INICIAL DA CARTA" -L ip
+
+--------------------------------------------------------------------------------------
+
+bruteforce ftp:
+hydra -l user -P /usr/share/wordlists/rockyou.txt ftp://ip
+
+--------------------------------------------------------------------------------------
+Enumerando SMB:
+
+msfconsole:
+
+            search SMB
+
+            VERSÃO -> 103 - auxiliary/scanner/smb/smb_version
+
+            sertando o alvo -> set RHOSTS ***.***.***.***
+
+            rondando o msf -> run
+
+smbclient:
+
+            smbclient -L \\\\***.***.***.***\\
+
+            ENTER NO LOGIN SEM SENHA
+
+            -L = Listar diretótios
+
+Tentando conseguir acesso:
+
+            smbclient \\\\***.***.***.***\\DIR_EX$
+
+ENTER NO LOGIN SEM SENHA
+
+```
